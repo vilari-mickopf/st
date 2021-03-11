@@ -49,5 +49,5 @@ See the man page for additional details.
 
 ## Credits
 
-- [sucless](https://st.suckless.org/)
+- [suckless](https://st.suckless.org/)
 - Based on Aurélien APTEL <aurelien dot aptel at gmail dot com> bt source code.
