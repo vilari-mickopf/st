@@ -209,8 +209,13 @@ static MouseShortcut mshortcuts[] = {
 #define MODKEY Mod1Mask
 #define TERMMOD (ControlMask|ShiftMask)
 
+static char *openurlcmd[] = { "/bin/sh", "-c",
+    "xdg-open $(xurls | dmenu -i -b -nb '#282c34' -nf '#abb2bf' -sb '#98c379' -sf '#191919' -fn 'Ubuntu:pixelsize=17' -l 5 -w $WINDOWID)",
+	"externalpipe", NULL };
+
 static Shortcut shortcuts[] = {
 	/* mask                 keysym          function        argument */
+	{ TERMMOD,              XK_U,           externalpipe,   {.v =  openurlcmd } },
 	{ XK_ANY_MOD,           XK_Break,       sendbreak,      {.i =  0} },
 	{ ControlMask,          XK_Print,       toggleprinter,  {.i =  0} },
 	{ ShiftMask,            XK_Print,       printscreen,    {.i =  0} },
