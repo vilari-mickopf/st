@@ -46,6 +46,8 @@
 #define TLINE(y)		((y) < term.scr ? term.hist[((y) + term.histi - \
 				term.scr + HISTSIZE + 1) % HISTSIZE] : \
 				term.line[(y) - term.scr])
+static inline int max(int a, int b) { return a > b ? a : b; }
+static inline int min(int a, int b) { return a < b ? a : b; }
 
 enum term_mode {
 	MODE_WRAP        = 1 << 0,
@@ -240,6 +242,15 @@ static uchar utfmask[UTF_SIZ + 1] = {0xC0, 0x80, 0xE0, 0xF0, 0xF8};
 static Rune utfmin[UTF_SIZ + 1] = {       0,    0,  0x80,  0x800,  0x10000};
 static Rune utfmax[UTF_SIZ + 1] = {0x10FFFF, 0x7F, 0x7FF, 0xFFFF, 0x10FFFF};
 
+int buffCols;
+extern int const buffSize;
+int histOp, histMode, histOff, histOffX, insertOff, altToggle;
+Line *buf = NULL;
+static TCursor c[3];
+static inline int rows() { return IS_SET(MODE_ALTSCREEN) ? term.row : buffSize;}
+static inline int rangeY(int i) { while (i < 0) i += rows(); return i % rows();}
+
+
 #include <time.h>
 static int su = 0;
 struct timespec sutv;
@@ -282,6 +293,56 @@ xwrite(int fd, const char *s, size_t len)
 	}
 
 	return aux;
+}
+
+void historyOpToggle(int start, int paint) {
+	if (!histOp == !(histOp + start)) if ((histOp += start) || 1) return;
+	if (histMode && paint && (!IS_SET(MODE_ALTSCREEN) || altToggle)) draw();
+	tcursor(CURSOR_SAVE);
+	histOp += start;
+	if (histMode && altToggle) {
+		tswapscreen();
+		memset(term.dirty,0,sizeof(*term.dirty)*term.row);
+	}
+	tcursor(CURSOR_LOAD);
+	*(!IS_SET(MODE_ALTSCREEN)?&term.line:&term.alt)=&buf[histOp?histOff:insertOff];
+}
+
+void historyModeToggle(int start) {
+	if (!(histMode = (histOp = !!start))) { tfulldirt(); } else {
+		tcursor(CURSOR_SAVE);
+		histOp = 0;
+		histOff = insertOff;
+	}
+}
+
+int historyBufferScroll(int n) {
+	if (IS_SET(MODE_ALTSCREEN) || !n) return histOp;
+	int p=abs(n=(n<0) ? max(n,-term.row) : min(n,term.row)), r=term.row-p,
+	          s=sizeof(*term.dirty), *ptr=histOp?&histOff:&insertOff;
+	if (!histMode || histOp) tfulldirt(); else {
+		memmove(&term.dirty[-min(n,0)], &term.dirty[max(n,0)], s*r);
+		memset(&term.dirty[n>0 ? r : 0], 0, s * p);
+	}
+	term.line = &buf[*ptr = (buffSize+*ptr+n) % buffSize];
+  // Clear the new region exposed by the shift.
+	if (!histOp) tclearregion(0, n>0?r+1:0, buffCols-1, n>0?term.row:p-1);
+	return 1;
+}
+
+int historyMove(int x, int y, int ly) {
+	historyOpToggle(1, 1);
+	y += ((term.c.x += x) < 0 ?term.c.x-term.col :term.c.x) / term.col;//< x
+	if ((term.c.x %= term.col) < 0) term.c.x += term.col;
+	if ((term.c.y += y) >= term.row) ly += term.c.y - term.row + 1;    //< y
+	else if (term.c.y < 0) ly += term.c.y;
+	term.c.y = MIN(MAX(term.c.y, 0), term.row - 1);
+	int off=insertOff-histOff, bot=rangeY(off), top=-rangeY(-term.row-off),
+	    pTop = (-ly>-top), pBot = (ly > bot), fin=histMode&&(pTop||pBot);
+	if (fin && (x||y)) term.c.x = pBot ? term.col-1 : 0;
+	historyBufferScroll(fin ? (pBot ? bot : top) : ly);
+	historyOpToggle(-1, 1);
+	return fin;
 }
 
 void *
@@ -499,8 +560,10 @@ selextend(int col, int row, int type, int done)
 	selnormalize();
 	sel.type = type;
 
+	if (histMode) historyOpToggle(1, 1);
 	if (oldey != sel.oe.y || oldex != sel.oe.x || oldtype != sel.type || sel.mode == SEL_EMPTY)
 		tsetdirt(MIN(sel.nb.y, oldsby), MAX(sel.ne.y, oldsey));
+	if (histMode) historyOpToggle(-1, 1);
 
 	sel.mode = done ? SEL_IDLE : SEL_READY;
 }
@@ -632,6 +695,7 @@ getsel(void)
 	if (sel.ob.x == -1)
 		return NULL;
 
+	if (histMode) historyOpToggle(1, 1);
 	bufsize = (term.col+1) * (sel.ne.y-sel.nb.y+1) * UTF_SIZ;
 	ptr = str = xmalloc(bufsize);
 
@@ -674,6 +738,7 @@ getsel(void)
 			*ptr++ = '\n';
 	}
 	*ptr = 0;
+	if (histMode) historyOpToggle(-1, 1);
 	return str;
 }
 
@@ -684,7 +749,9 @@ selclear(void)
 		return;
 	sel.mode = SEL_IDLE;
 	sel.ob.x = -1;
+	if (histMode) historyOpToggle(1, 1);
 	tsetdirt(sel.nb.y, sel.ne.y);
+	if (histMode) historyOpToggle(-1, 1);
 }
 
 void
@@ -1355,8 +1422,8 @@ tclearregion(int x1, int y1, int x2, int y2)
 	if (y1 > y2)
 		temp = y1, y1 = y2, y2 = temp;
 
-	LIMIT(x1, 0, term.col-1);
-	LIMIT(x2, 0, term.col-1);
+    LIMIT(x1, 0, buffCols-1);
+    LIMIT(x2, 0, buffCols-1);
 	LIMIT(y1, 0, term.row-1);
 	LIMIT(y2, 0, term.row-1);
 
@@ -2609,8 +2676,10 @@ void
 tresize(int col, int row)
 {
 	int i, j;
-	int minrow = MIN(row, term.row);
-	int mincol = MIN(col, term.col);
+	int const colSet = col, alt = IS_SET(MODE_ALTSCREEN), ini = buf == NULL;
+	col = MAX(col, buffCols);
+	row = MIN(row, buffSize);
+	int const minrow = MIN(row, term.row), mincol = MIN(col, buffCols);
 	int *bp;
 	TCursor c;
 
@@ -2619,6 +2688,7 @@ tresize(int col, int row)
 		        "tresize: error resizing to %dx%d\n", col, row);
 		return;
 	}
+	if (alt) tswapscreen();
 
 	/*
 	 * slide screen to keep cursor where we expect it -
@@ -2626,21 +2696,18 @@ tresize(int col, int row)
 	 * memmove because we're freeing the earlier lines
 	 */
 	for (i = 0; i <= term.c.y - row; i++) {
-		free(term.line[i]);
 		free(term.alt[i]);
 	}
 	/* ensure that both src and dst are not NULL */
 	if (i > 0) {
-		memmove(term.line, term.line + i, row * sizeof(Line));
 		memmove(term.alt, term.alt + i, row * sizeof(Line));
 	}
 	for (i += row; i < term.row; i++) {
-		free(term.line[i]);
 		free(term.alt[i]);
 	}
 
 	/* resize to new height */
-	term.line = xrealloc(term.line, row * sizeof(Line));
+	buf = xrealloc(buf, (buffSize + row) * sizeof(Line));
 	term.alt  = xrealloc(term.alt,  row * sizeof(Line));
 	term.dirty = xrealloc(term.dirty, row * sizeof(*term.dirty));
 	term.tabs = xrealloc(term.tabs, col * sizeof(*term.tabs));
@@ -2655,27 +2722,34 @@ tresize(int col, int row)
 
 	/* resize each row to new width, zero-pad if needed */
 	for (i = 0; i < minrow; i++) {
-		term.line[i] = xrealloc(term.line[i], col * sizeof(Glyph));
 		term.alt[i]  = xrealloc(term.alt[i],  col * sizeof(Glyph));
 	}
 
 	/* allocate any new rows */
 	for (/* i = minrow */; i < row; i++) {
-		term.line[i] = xmalloc(col * sizeof(Glyph));
 		term.alt[i] = xmalloc(col * sizeof(Glyph));
 	}
-	if (col > term.col) {
-		bp = term.tabs + term.col;
+	if (col > buffCols) {
+		bp = term.tabs + buffCols;
 
-		memset(bp, 0, sizeof(*term.tabs) * (col - term.col));
+		memset(bp, 0, sizeof(*term.tabs) * (col - buffCols));
 		while (--bp > term.tabs && !*bp)
 			/* nothing */ ;
 		for (bp += tabspaces; bp < term.tabs + col; bp += tabspaces)
 			*bp = 1;
 	}
+	Glyph g=(Glyph){.bg=term.c.attr.bg, .fg=term.c.attr.fg, .u=' ', .mode=0};
+	for (i = 0; i < buffSize; ++i) {
+		buf[i] = xrealloc(ini ? NULL : buf[i], col*sizeof(Glyph));
+		for (int j = ini ? 0 : buffCols; j < col; ++j) buf[i][j] = g;
+	}
+	for (i = 0; i < row; ++i) buf[buffSize + i] = buf[i];
+	term.line = &buf[*(histOp?&histOff:&insertOff) +=MAX(term.c.y-row+1,0)];
 	/* update terminal size */
-	term.col = col;
+	term.col = colSet;
+	buffCols = col;
 	term.row = row;
+	if (alt) tswapscreen();
 	/* reset scrolling region */
 	tsetscroll(0, row-1);
 	/* make use of the LIMIT in tmoveto */

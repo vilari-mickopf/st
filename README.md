@@ -17,6 +17,7 @@ st is a simple terminal emulator for X which sucks less.
 - [scrollback-mouse-altscreen](https://st.suckless.org/patches/scrollback/)
 - [spoiler](https://st.suckless.org/patches/spoiler/)
 - [vertcenter](https://st.suckless.org/patches/vertcenter/)
+- [column](https://github.com/juliusHuelsmann/st-history-vim/tree/patch_column)
 
 
 ## Requirements
