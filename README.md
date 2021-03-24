@@ -26,7 +26,7 @@ st is a simple terminal emulator for X which sucks less.
 
 In order to build st you need the Xlib header files.
 
-```
+```bash
 pacman -S libxft
 ```
 
@@ -36,7 +36,7 @@ pacman -S libxft
 Enter the following command to build and install st (if
 necessary as root):
 
-```
+```bash
 make clean install
 ```
 
@@ -45,7 +45,7 @@ make clean install
 If you did not install st with make clean install, you must compile
 the st terminfo entry with the following command:
 
-```
+```bash
 tic -sx st.info
 ```
 
